@@ -61,11 +61,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
       - name: Install AWS CLI
         run: |
           curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
           unzip awscliv2.zip
-          sudo ./aws/install
+          sudo ./aws/install --update
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -103,36 +106,25 @@ jobs:
       
       - name: Update values.yaml dynamically
         run: |
-          IMAGE_REPO=${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_REPO_NAME }}
+          WITHOUT_TAG=${IMAGE_URI%%:*}
+          IMAGE_REPO=${WITHOUT_TAG##*/}
           IMAGE_TAG=latest
           DB_USER=${{ secrets.MONGODB_USERNAME }}
           DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }}
           yq e ".image.repository = \"${IMAGE_REPO}\" |
                 .image.tag = \"${IMAGE_TAG}\" |
                 .env.DB_USER = \"${DB_USER}\" |
-                .env.DB_PASSWORD = \"${DB_PASSWORD}\"" -i "helm/values.yaml"
+                .env.DB_PASSWORD = \"${DB_PASSWORD}\"" -i "$GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml"
 
-      # - name: Create Namespace and Secrets for Node.js API
-      #   run: |
-      #     kubectl create ns nodejs-api --dry-run=client -o yaml | kubectl apply -f -
-      #     kubectl delete secret nodejs-api-secret -n nodejs-api --ignore-not-found
-      #     kubectl create secret generic nodejs-api-secret \
-      #       --from-literal=DB_USER=${{ secrets.MONGODB_USERNAME }} \
-      #       --from-literal=DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }} \
-      #       -n nodejs-api
+      - name: Update Ingress annotations
+        run: |
+          sed -i 's|alb.ingress.kubernetes.io/subnets:.*|alb.ingress.kubernetes.io/subnets: subnet-0f6b89f2a0780148d,subnet-013110db1a29df90c|' "$GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml"
 
-  #     - name: Deploy Node.js CRUD API via Helm
-  #       run: |
-  #         helm upgrade --install nodejs-api ./nodejs-helm-chart \
-  #           --namespace nodejs-api \
-  #           --set image.repository=${{ steps.login-ecr.outputs.registry }}/nodejs-crud-api \
-  #           --set image.tag=latest \
-  #           --values ./nodejs-helm-chart/values.yaml
-
-  #     - name: Deploy Prometheus Stack (Optional)
-  #       run: |
-  #         helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-  #         helm repo update
-  #         helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  #           --namespace monitoring \
-  #           --create-namespace
+      - name: Deploy Node.js CRUD API via Helm
+        run: |
+          helm upgrade --install nodejs-api $GITHUB_WORKSPACE/nodejs-api-helm-chart \
+            --namespace nodejs-api \
+            --create-namespace \
+            --set image.repository=${{ steps.login-ecr.outputs.registry }}/nodejs-crud-api \
+            --set image.tag=latest \
+            --values $GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml
