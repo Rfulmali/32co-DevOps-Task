@@ -6,7 +6,7 @@ on:
       - node-curd-api-task
 
 env:
-  AWS_REGION: ap-south-1
+  AWS_REGION: us-east-1
   IMAGE_REPO_NAME: nodejs-crud-api
   IMAGE_TAG: latest
 
@@ -25,13 +25,6 @@ jobs:
       - name: Install dependencies
         working-directory: ./nodejs-crud-docker
         run: npm install
-
-      # - name: Install and start Docker (manual method)
-      #   run: |
-      #     sudo apt-get update
-      #     sudo apt-get install -y docker.io
-      #     sudo systemctl start docker
-      #     sudo usermod -aG docker $USER
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
