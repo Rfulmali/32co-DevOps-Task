@@ -1,0 +1,112 @@
+name: Test, Build, Push to ECR, Deploy to EKS
+
+on:
+  push:
+    branches:
+      - node-curd-api-task
+
+env:
+  AWS_REGION: ap-south-1
+  IMAGE_REPO_NAME: nodejs-crud-api
+  IMAGE_TAG: latest
+
+jobs:
+  build-test-push:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: ./nodejs-crud-docker
+        run: npm install
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image URI
+        id: image-uri
+        run: |
+          echo "IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_REPO_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
+
+      - name: Build and push Docker image to ECR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nodejs-crud-docker
+          push: true
+          tags: ${{ env.IMAGE_URI }}
+
+  # deploy-to-eks:
+  #   needs: build-test-push
+  #   runs-on: self-hosted
+  #   environment: production
+  #   steps:
+  #     - name: Checkout code
+  #       uses: actions/checkout@v4
+
+  #     - name: Configure AWS credentials
+  #       uses: aws-actions/configure-aws-credentials@v4
+  #       with:
+  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #         aws-region: ap-south-1
+
+  #     - name: Update kubeconfig for EKS
+  #       run: |
+  #         aws eks update-kubeconfig --region ap-south-1 --name my-cluster
+
+  #     - name: Install Helm
+  #       uses: azure/setup-helm@v4
+
+  #     - name: Deploy MongoDB via Helm (idempotent)
+  #       run: |
+  #         helm repo add bitnami https://charts.bitnami.com/bitnami
+  #         helm repo update
+  #         helm upgrade --install mongodb bitnami/mongodb \
+  #           --namespace mongodb \
+  #           --create-namespace \
+  #           --set auth.rootPassword=${{ secrets.MONGODB_ROOT_PASSWORD }} \
+  #           --set auth.username=${{ secrets.MONGODB_USERNAME }} \
+  #           --set auth.password=${{ secrets.MONGODB_PASSWORD }} \
+  #           --set auth.database=${{ secrets.MONGODB_DATABASE }} \
+  #           --set persistence.storageClass=gp2 \
+  #           --set persistence.size=8Gi \
+  #           --set replicaSet.enabled=true
+
+  #     - name: Create Namespace and Secrets for Node.js API
+  #       run: |
+  #         kubectl create ns nodejs-api --dry-run=client -o yaml | kubectl apply -f -
+  #         kubectl delete secret nodejs-api-secret -n nodejs-api --ignore-not-found
+  #         kubectl create secret generic nodejs-api-secret \
+  #           --from-literal=DB_USER=${{ secrets.MONGODB_USERNAME }} \
+  #           --from-literal=DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }} \
+  #           -n nodejs-api
+
+  #     - name: Deploy Node.js CRUD API via Helm
+  #       run: |
+  #         helm upgrade --install nodejs-api ./nodejs-helm-chart \
+  #           --namespace nodejs-api \
+  #           --set image.repository=${{ steps.login-ecr.outputs.registry }}/nodejs-crud-api \
+  #           --set image.tag=latest \
+  #           --values ./nodejs-helm-chart/values.yaml
+
+  #     - name: Deploy Prometheus Stack (Optional)
+  #       run: |
+  #         helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+  #         helm repo update
+  #         helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  #           --namespace monitoring \
+  #           --create-namespace
