@@ -13,6 +13,8 @@ env:
   DB_HOST: mongodb.mongodb.svc.cluster.local
   DB_PORT: 27017
   DB_NAME: testdb
+  DB_USER: ""
+  DB_PASSWORD: ""
 
 resources:
   limits:

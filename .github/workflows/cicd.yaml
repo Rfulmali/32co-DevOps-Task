@@ -9,6 +9,7 @@ env:
   AWS_REGION: us-east-1
   IMAGE_REPO_NAME: nodejs-crud-api
   IMAGE_TAG: latest
+  CLUSTER_NAME: main
 
 jobs:
   build-test-push:
@@ -52,51 +53,67 @@ jobs:
           push: true
           tags: ${{ env.IMAGE_URI }}
 
-  # deploy-to-eks:
-  #   needs: build-test-push
-  #   runs-on: self-hosted
-  #   environment: production
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
+  deploy-to-eks:
+    needs: build-test-push
+    runs-on: self-hosted
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-  #     - name: Configure AWS credentials
-  #       uses: aws-actions/configure-aws-credentials@v4
-  #       with:
-  #         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  #         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  #         aws-region: ap-south-1
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-  #     - name: Update kubeconfig for EKS
-  #       run: |
-  #         aws eks update-kubeconfig --region ap-south-1 --name my-cluster
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
 
-  #     - name: Install Helm
-  #       uses: azure/setup-helm@v4
+      - name: Install Helm
+        uses: azure/setup-helm@v4
 
-  #     - name: Deploy MongoDB via Helm (idempotent)
-  #       run: |
-  #         helm repo add bitnami https://charts.bitnami.com/bitnami
-  #         helm repo update
-  #         helm upgrade --install mongodb bitnami/mongodb \
-  #           --namespace mongodb \
-  #           --create-namespace \
-  #           --set auth.rootPassword=${{ secrets.MONGODB_ROOT_PASSWORD }} \
-  #           --set auth.username=${{ secrets.MONGODB_USERNAME }} \
-  #           --set auth.password=${{ secrets.MONGODB_PASSWORD }} \
-  #           --set auth.database=${{ secrets.MONGODB_DATABASE }} \
-  #           --set persistence.storageClass=gp2 \
-  #           --set persistence.size=8Gi \
-  #           --set replicaSet.enabled=true
+      - name: Deploy MongoDB via Helm (idempotent)
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm upgrade --install mongodb bitnami/mongodb \
+            --namespace mongodb \
+            --create-namespace \
+            --set auth.rootPassword=${{ secrets.MONGODB_ROOT_PASSWORD }} \
+            --set auth.username=${{ secrets.MONGODB_USERNAME }} \
+            --set auth.password=${{ secrets.MONGODB_PASSWORD }} \
+            --set auth.database=${{ secrets.MONGODB_DATABASE }} \
+            --set persistence.storageClass=gp2 \
+            --set persistence.size=8Gi \
+            --set replicaSet.enabled=true
 
-  #     - name: Create Namespace and Secrets for Node.js API
-  #       run: |
-  #         kubectl create ns nodejs-api --dry-run=client -o yaml | kubectl apply -f -
-  #         kubectl delete secret nodejs-api-secret -n nodejs-api --ignore-not-found
-  #         kubectl create secret generic nodejs-api-secret \
-  #           --from-literal=DB_USER=${{ secrets.MONGODB_USERNAME }} \
-  #           --from-literal=DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }} \
-  #           -n nodejs-api
+      - name: Install yq
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+      
+      - name: Update values.yaml dynamically
+        run: |
+          IMAGE_REPO=${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_REPO_NAME }}
+          IMAGE_TAG=latest
+          DB_USER=${{ secrets.MONGODB_USERNAME }}
+          DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }}
+          yq e ".image.repository = \"${IMAGE_REPO}\" |
+                .image.tag = \"${IMAGE_TAG}\" |
+                .env.DB_USER = \"${DB_USER}\" |
+                .env.DB_PASSWORD = \"${DB_PASSWORD}\"" -i "helm/values.yaml"
+
+      # - name: Create Namespace and Secrets for Node.js API
+      #   run: |
+      #     kubectl create ns nodejs-api --dry-run=client -o yaml | kubectl apply -f -
+      #     kubectl delete secret nodejs-api-secret -n nodejs-api --ignore-not-found
+      #     kubectl create secret generic nodejs-api-secret \
+      #       --from-literal=DB_USER=${{ secrets.MONGODB_USERNAME }} \
+      #       --from-literal=DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }} \
+      #       -n nodejs-api
 
   #     - name: Deploy Node.js CRUD API via Helm
   #       run: |

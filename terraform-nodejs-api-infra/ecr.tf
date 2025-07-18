@@ -21,10 +21,11 @@ resource "aws_iam_policy" "ecr_pull_policy" {
       {
         Effect = "Allow",
         Action = [
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage"
+				  "ecr:GetDownloadUrlForLayer",
+				  "ecr:BatchGetImage",
+				  "ecr:*",
+				  "ecr:GetAuthorizationToken",
+				  "ecr:BatchCheckLayerAvailability"
         ],
         Resource = "*"
       }
