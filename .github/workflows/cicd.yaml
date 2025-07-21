@@ -14,6 +14,8 @@ env:
 jobs:
   build-test-push:
     runs-on: self-hosted
+    outputs:
+      IMAGE_URL: ${{ steps.login-ecr.outputs.registry }}
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
@@ -29,8 +31,11 @@ jobs:
 
       - name: Install Docker
         run: |
-          sudo install -m 0755 -d /etc/apt/keyrings
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+          sudo mkdir -p /etc/apt/keyrings
+          sudo chmod 0755 /etc/apt/keyrings
+          
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor | sudo tee /etc/apt/keyrings/docker.gpg > /dev/null
+          sudo chmod a+r /etc/apt/keyrings/docker.gpg
       
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
       
@@ -55,7 +60,7 @@ jobs:
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Set image URI
-        id: image-uri
+        id: set-image-uri
         run: |
           echo "IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_REPO_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
 
@@ -117,14 +122,15 @@ jobs:
           sudo wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/bin/yq
           sudo chmod +x /usr/bin/yq
       
+      - name: Set IMAGE_URI in env
+        run: echo "IMAGE_URL=${{ needs.build-test-push.outputs.IMAGE_URL }}/${{ env.IMAGE_REPO_NAME }}" >> $GITHUB_ENV
+
       - name: Update values.yaml dynamically
         run: |
-          WITHOUT_TAG=${IMAGE_URI%%:*}
-          IMAGE_REPO=${WITHOUT_TAG##*/}
           IMAGE_TAG=latest
           DB_USER=${{ secrets.MONGODB_USERNAME }}
           DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }}
-          yq e ".image.repository = \"${IMAGE_REPO}\" |
+          yq e ".image.repository = \"${IMAGE_URL}\" |
                 .image.tag = \"${IMAGE_TAG}\" |
                 .env.DB_USER = \"${DB_USER}\" |
                 .env.DB_PASSWORD = \"${DB_PASSWORD}\"" -i "$GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml"
@@ -138,6 +144,4 @@ jobs:
           helm upgrade --install nodejs-api $GITHUB_WORKSPACE/nodejs-api-helm-chart \
             --namespace nodejs-api \
             --create-namespace \
-            --set image.repository=${{ steps.login-ecr.outputs.registry }}/nodejs-crud-api \
-            --set image.tag=latest \
             --values $GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml
