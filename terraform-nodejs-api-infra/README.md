@@ -5,6 +5,8 @@ This Terraform project is designed to create an AWS infrastructure that includes
 - **VPC (Virtual Private Cloud):** Custom VPC for isolating resources.
 - **EKS Cluster (Elastic Kubernetes Service):** Managed Kubernetes cluster for containerized applications.
 - **AWS Load Balancer Controller:** Deployed within the EKS cluster to manage Application Load Balancers (ALB) for Kubernetes services.
+- **ECR:** Private container registry to store Docker images.
+- **Runner:** EC2-based runner for CI/CD workflows.
 
 ## Prerequisites
 
@@ -19,12 +21,15 @@ Ensure you have the following installed and configured:
 
 ```
 terraform-nodejs-api-infra/
-├── cluster.tf                            # EKS module
-├── vpc.tf                                # VPC module
-├── load-balancer-controller.tf           # AWS Load Balancer Controller setup
-├── variable.tf                           # Input variables
-├── provider.tf                           # Terraform providers
-└── README.md                             # Project documentation
+├── ./policy                              # IAM Policies (JSON)
+├── vpc.tf                                # VPC Module
+├── cluster.tf                            # EKS Module
+├── ecr.tf                                # ECR Module
+├── runner.tf                             # GitHub Action Runner
+├── load-balancer-controller.tf           # AWS Load Balancer Controller Setup
+├── variable.tf                           # Input Variables
+├── provider.tf                           # Terraform Providers
+└── README.md                             # Project Documentation
 ```
 
 ## Features
@@ -39,7 +44,14 @@ terraform-nodejs-api-infra/
 - Configures IAM roles and policies for EKS and worker nodes.
 - Outputs the kubeconfig file for cluster access.
 
-### 3. AWS Load Balancer Controller
+### 3. ECR 
+- Private container registry for Docker image storage.
+
+### 4. GitHub Action Runner
+- EC2-based self-hosted runner
+- Integrated with GitHub for CI/CD
+
+### 5. AWS Load Balancer Controller
 - Installs the AWS Load Balancer Controller using Helm.
 - Configures necessary IAM roles and policies for ALB integration.
 - Supports the creation of ALBs for Kubernetes Ingress resources.
@@ -48,7 +60,7 @@ terraform-nodejs-api-infra/
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/Anu0104/nodejs-crud-api.git
+   git clone https://github.com/Rfulmali/32co-DevOps-Task.git
    cd terraform-nodejs-api-infra
    ```
 
@@ -73,6 +85,7 @@ terraform-nodejs-api-infra/
 6. **Access EKS Cluster:**
    Retrieve the kubeconfig output to access the EKS cluster:
    ```bash
+   rm ~/.kube/config
    aws eks --region <region> update-kubeconfig --name <cluster-name>
    ```
 
@@ -88,34 +101,42 @@ terraform-nodejs-api-infra/
    ```bash
    terraform init
    ```
-9. **Plan the infrastructure:**
+10. **Plan the infrastructure:**
    ```bash
    terraform plan
    ```
 
-9. **Apply the configuration:**
+11. **Apply the configuration:**
    ```bash
    terraform apply
    ```
 
+8. **Setup Runner VM**
+   ```bash
+   mkdir actions-runner && cd actions-runner
+   curl -o actions-runner-linux-x64-2.326.0.tar.gz -L https://github.com/actions/runner/releases/download/v2.326.0/actions-runner-linux-x64-2.326.0.tar.gz
+   echo "9c74af9b4352bbc99aecc7353b47bcdfcd1b2a0f6d15af54a99f54a0c14a1de8  actions-runner-linux-x64-2.326.0.tar.gz" | shasum -a 256 -c
+   tar xzf ./actions-runner-linux-x64-2.326.0.tar.gz
+   
+   ./config.sh --url <Repo_URL> --token <Repo_TOKEN>
+   ./run.sh
+   ```
+
 ## Inputs
 
-| Variable Name       | Description                                  | Default         |
-|---------------------|----------------------------------------------|-----------------|
-| `region`            | AWS region                                  | `us-east-1`     |
-| `vpc_cidr`          | CIDR block for the VPC                      | `10.0.0.0/16`   |
-| `eks_cluster_name`  | Name of the EKS cluster                     | `my-cluster`    |
-| `node_instance_type`| Instance type for worker nodes              | `t3.medium`     |
-| `node_count`        | Number of worker nodes                      | `3`             |
-
-## Outputs
-
-| Output Name         | Description                                  |
-|---------------------|----------------------------------------------|
-| `vpc_id`            | ID of the created VPC                       |
-| `eks_cluster_arn`   | ARN of the created EKS cluster              |
-| `subnet_ids`        | IDs of the created subnets                  |
-| `kubeconfig`        | Kubeconfig file for cluster access          |
+| `Name`              | `Description`                            | `Type`         | `Default`                         |
+|---------------------|------------------------------------------|----------------|-----------------------------------|
+| `vpc_name`          | Name of the VPC                          | `string`       | `"main"`                          |
+| `vpc_cidr`          | CIDR block for the VPC                   | `string`       | `"10.0.0.0/16"`                   |
+| `azs`               | Availability Zones                       | `list(string)` | `["us-east-1a", "us-east-1b"]`    |
+| `private_subnets`   | CIDR blocks for private subnets          | `list(string)` | `["10.0.0.0/19", "10.0.32.0/19"]` |
+| `public_subnets`    | CIDR blocks for public subnets           | `list(string)` | `["10.0.64.0/19", "10.0.96.0/19"]`|
+| `cluster_name`      | Name of the Cluster                      | `string`       | `"main"`                          |
+| `region`            | AWS region                               | `string`       | `"us-east-1"`                     |
+| `ami_id`            | Amazon Linux 2 AMI or Ubuntu             | `string`       | `"ami-0abcdef1234567890"`         |
+| `public_key_path`   | Path to your SSH public key              | `string`       | `"~/.ssh/32co-task-key.pub"`      |
+| `runner_sg_cidr`    | Your IP CIDR for SSH access              | `string`       | `"0.0.0.0/0"`                     |
+| `ecr_repo_name`     | ECR Repo Name                            | `string`       | `"nodejs-crud-api"`               |
 
 ## Cleanup
 
