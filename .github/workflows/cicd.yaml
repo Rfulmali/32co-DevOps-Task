@@ -1,0 +1,162 @@
+name: Test, Build, Push to ECR, Deploy to EKS
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  AWS_REGION: us-east-1
+  IMAGE_REPO_NAME: nodejs-crud-api
+  CLUSTER_NAME: main
+
+jobs:
+  build-test-push:
+    runs-on: self-hosted
+    outputs:
+      IMAGE_URL: ${{ steps.login-ecr.outputs.registry }}
+      IMAGE_TAG: ${{ steps.set-image-tag.outputs.IMAGE_TAG}}
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        working-directory: ./nodejs-crud-docker
+        run: npm install
+
+      - name: Install Docker
+        run: |
+          sudo mkdir -p /etc/apt/keyrings
+          sudo chmod 0755 /etc/apt/keyrings
+          
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor | sudo tee /etc/apt/keyrings/docker.gpg > /dev/null
+          sudo chmod a+r /etc/apt/keyrings/docker.gpg
+      
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+      
+          sudo apt-get update
+          sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+          sudo systemctl enable docker
+          sudo systemctl start docker
+
+          sudo usermod -aG docker $USER || true
+          sudo systemctl restart docker
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set dynamic image tag
+        id: set-image-tag
+        run: |
+          echo "IMAGE_TAG=${GITHUB_SHA::7}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Set image URI
+        id: set-image-uri
+        run: |
+          echo "IMAGE_URI=${{ steps.login-ecr.outputs.registry }}/${{ env.IMAGE_REPO_NAME }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
+
+      - name: Build and push Docker image to ECR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nodejs-crud-docker
+          push: true
+          tags: ${{ env.IMAGE_URI }}
+
+  deploy-to-eks:
+    needs: build-test-push
+    runs-on: self-hosted
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install unzip
+        run: sudo apt-get update && sudo apt-get install -y unzip
+
+      - name: Install AWS CLI
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          sudo ./aws/install --update
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.CLUSTER_NAME }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Deploy MongoDB via Helm (idempotent)
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+          helm upgrade --install mongodb bitnami/mongodb \
+            --namespace mongodb \
+            --create-namespace \
+            --set auth.rootPassword=${{ secrets.MONGODB_ROOT_PASSWORD }} \
+            --set auth.username=${{ secrets.MONGODB_USERNAME }} \
+            --set auth.password=${{ secrets.MONGODB_PASSWORD }} \
+            --set auth.database=${{ secrets.MONGODB_DATABASE }} \
+            --set persistence.storageClass=gp2 \
+            --set persistence.size=8Gi \
+            --set replicaSet.enabled=true
+
+      - name: Install yq
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.40.5/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+      
+      - name: Set IMAGE_URI and IMAGE_TAG in env
+        run: |
+          echo "IMAGE_URL=${{ needs.build-test-push.outputs.IMAGE_URL }}/${{ env.IMAGE_REPO_NAME }}" >> $GITHUB_ENV
+          echo "IMAGE_TAG=${{ needs.build-test-push.outputs.IMAGE_TAG }}" >> $GITHUB_ENV
+
+      - name: Update values.yaml dynamically
+        run: |
+          DB_USER=${{ secrets.MONGODB_USERNAME }}
+          DB_PASSWORD=${{ secrets.MONGODB_PASSWORD }}
+          yq e ".image.repository = \"${IMAGE_URL}\" |
+                .image.tag = \"${IMAGE_TAG}\" |
+                .env.DB_USER = \"${DB_USER}\" |
+                .env.DB_PASSWORD = \"${DB_PASSWORD}\"" -i "$GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml"
+
+      - name: Update Ingress annotations
+        run: |
+          sed -i 's|alb.ingress.kubernetes.io/subnets:.*|alb.ingress.kubernetes.io/subnets: subnet-0d268ccf503061f72,subnet-0b7dc512dc1eb1ce6|' "$GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml"
+
+      - name: Deploy Node.js CRUD API via Helm
+        run: |
+          helm upgrade --install nodejs-api $GITHUB_WORKSPACE/nodejs-api-helm-chart \
+            --namespace nodejs-api \
+            --create-namespace \
+            --values $GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml
+      
+      - name: Add helm repo and setup Prometheus community
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+          --namespace monitoring --create-namespace \
+          --wait
