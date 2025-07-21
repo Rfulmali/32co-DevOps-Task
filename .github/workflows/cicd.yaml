@@ -3,7 +3,7 @@ name: Test, Build, Push to ECR, Deploy to EKS
 on:
   push:
     branches:
-      - node-curd-api-task
+      - main
 
 env:
   AWS_REGION: us-east-1
@@ -152,3 +152,11 @@ jobs:
             --namespace nodejs-api \
             --create-namespace \
             --values $GITHUB_WORKSPACE/nodejs-api-helm-chart/values.yaml
+      
+      - name: Add helm repo and setup Prometheus community
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+          --namespace monitoring --create-namespace \
+          --wait
